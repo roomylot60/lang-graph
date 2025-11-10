@@ -81,6 +81,8 @@ def update_state(state: State) -> dict:
     new_overlap = buf[-2:] if len(buf) >= 2 else buf
     return {"buffer_sentences": [], "last_overlap": new_overlap}
 ```
+- 노드는 순수 함수에 가깝게: 부수효과 최소화
+- 반환 dict에는 바꿀 키만 포함(나머지는 LangGraph가 유지)
 
 ### 4) 그래프(Edges) 구성
 - 선형 연결 + 조건 분기를 섞어 실행 흐름 작성
@@ -117,16 +119,12 @@ memory = MemorySaver()
 app = g.compile(checkpointer=memory)
 ```
 
-포인트
-
-add_conditional_edges(source, fn, mapping)에서 fn(state)는 문자 라벨을 반환, mapping의 키와 매칭됩니다.
-
-루프를 만들고 싶으면 g.add_edge("update_state", "ingest_sentence") 같은 역방향 연결을 사용(스트리밍/폴링 모델일 때).
+- `add_conditional_edges(source, fn, mapping)`에서 `fn(state)`는 문자 라벨을 반환, mapping의 키와 매칭
+- 루프를 만들고 싶으면 `g.add_edge("update_state", "ingest_sentence")` 같은 역방향 연결을 사용(스트리밍/폴링 모델일 때)
 
 ### 5) 실행/호출 패턴
-
-- 단발 실행: 한 번의 입력에 대해 그래프를 한 바퀴 돌립니다.
-- 스트리밍: 외부 이벤트(STT 문장 수신)마다 app.invoke()를 반복 호출하거나, 루프 에지를 구성해 상주형으로 운용합니다.
+- 단발 실행: 한 번의 입력에 대해 그래프를 한 바퀴 실행
+- 스트리밍: 외부 이벤트(STT 문장 수신)마다 `app.invoke()`를 반복 호출하거나, 루프 에지를 구성해 상주형으로 운용
 
 ```python
 # 초기 상태(필요 키만)
@@ -145,9 +143,8 @@ state = app.invoke({**state, "buffer_sentences": state["buffer_sentences"] + ["�
 print(state["running_summary"])  # 최신 요약 확인
 ```
 ### 6) 중단/재개, 인터럽트 훅
-
-- 중단/재개: checkpointer=MemorySaver()를 쓰면 각 스텝 후 스냅샷이 남아 장애 복구가 쉽습니다.
-- 인터럽트 포인트: 특정 노드 전/후에 중단하고 외부 확인/개입 후 이어갈 수 있습니다.
+- 중단/재개: `checkpointer=MemorySaver()`를 쓰면 각 스텝 후 스냅샷이 남아 장애 복구가 용이
+- 인터럽트 포인트: 특정 노드 전/후에 중단하고 외부 확인/개입 후 재개
 
 ```python
 app = g.compile(
@@ -158,9 +155,8 @@ app = g.compile(
 ```
 
 ### 7) 서브그래프, 병렬, 재사용
-(1) 서브그래프
-
-복잡한 경로를 하나의 노드처럼 묶어 재사용할 수 있습니다.
+#### (1) 서브그래프
+- 복잡한 경로를 하나의 노드처럼 묶어 재사용할 수 있습니다.
 
 ```python
 # 서브 상태/그래프 정의
@@ -179,23 +175,21 @@ sub_app = sub.compile()
 g.add_node("subpipeline", sub_app)   # 함수처럼 사용
 ```
 
-(2) 병렬(팬아웃) 패턴
-
-여러 독립 후처리를 동시에 돌리고 마지막에 병합하는 패턴을 구성할 수 있습니다(노드들을 같은 선행 노드에서 이어 주고, 결과를 모으는 노드 하나로 합류).
+#### (2) 병렬(팬아웃) 패턴
+- 여러 독립 후처리를 동시에 돌리고 마지막에 병합하는 패턴을 구성(노드들을 같은 선행 노드에서 이어 주고, 결과를 모으는 노드 하나로 합류)
 
 ### 8) 성능·안정화 포인트
-
 - Partial Update 원칙: 노드는 바꿀 키만 반환하세요(불필요한 대용량 키 복사 방지).
 - 토큰 예산 고정: running_summary는 항상 고정 길이로 유지해 지연이 시간에 따라 늘지 않게.
 - 디바운스: 문장 이벤트 과밀 시 0.5~1.0s 지연 후 단일 트리거 처리.
 - 로그/메트릭: meta에 prefill_ms, first_token_ms, decode_tps, n_in/n_out 저장 → 병목 진단.
-- 루프/재진입 보호: 요약 중 재요약 진입 방지 플래그(예: meta["busy"]=True).
+- 루프/재진입 보호: 요약 중 재요약 진입 방지 플래그(예: `meta["busy"]=True`).
 
 ### 9) 시각화
-- 구성이 복잡해지면 그래프를 그려보는 것이 유용합니다.
+- 구성이 복잡해지면 그래프를 그려보는 것이 유용
 
-# 일부 환경에서 지원: g.get_graph().draw_png("graph.png") 또는 draw_dot
-# (환경 의존, 문서/예제에 맞춰 사용)
+**일부 환경에서 지원: `g.get_graph().draw_png("graph.png")` 또는 `draw_dot`**
+**(환경 의존, 문서/예제에 맞춰 사용)**
 
 ### 10) 실무 템플릿(최소 뼈대)
 ```python
@@ -224,5 +218,8 @@ g.add_edge("update_state", END)
 
 app = g.compile(checkpointer=MemorySaver())
 ```
+- 이 템플릿 위에 LLM 호출 래퍼, vLLM 엔드포인트, 출력 형식 강제 프롬프트를 얹으면, 곧바로 STT 기반 슬라이딩 요약을 적용 가능
 
-이 템플릿 위에 LLM 호출 래퍼, vLLM 엔드포인트, 출력 형식 강제 프롬프트를 얹으면, 곧바로 STT 기반 슬라이딩 요약을 돌릴 수 있습니다.
+
+
+
